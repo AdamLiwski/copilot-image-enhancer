@@ -1,0 +1,35 @@
+Ignoruj folder wirtualnego środowiska (jeśli używasz)
+
+venv/
+.env
+
+Ignoruj cache Pythona
+
+pycache/
+*.pyc
+
+BARDZO WAŻNE: Ignoruj folder sesji przeglądarki
+
+Ten folder jest ogromny i zawiera Twoje dane logowania. Nie chcesz tego w Git.
+
+edge_profile/
+
+Ignoruj logi i błędy
+
+*.log
+
+Opcjonalnie: Ignoruj zdjęcia wejściowe i wyjściowe,
+
+ale zachowaj samą strukturę folderów (dzięki plikom .gitkeep, jeśli byś je dodał)
+
+Jeśli chcesz trzymać zdjęcia w repozytorium, usuń poniższe dwie linie.
+
+input_images/*
+output_images/*
+!input_images/.gitkeep
+!output_images/.gitkeep
+
+Ignoruj pliki systemowe
+
+.DS_Store
+Thumbs.db
