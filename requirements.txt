@@ -1,3 +1,5 @@
 selenium
 pyautogui
 webdriver-manager
+pywin32
+Pillow
