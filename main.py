@@ -21,15 +21,39 @@ IMAGES_FOLDER = os.path.join(BASE_DIR, "input_images")
 OUTPUT_FOLDER = os.path.join(BASE_DIR, "output_images")
 SESSION_FOLDER = os.path.join(BASE_DIR, "edge_profile")
 LOCAL_DRIVER_NAME = "msedgedriver.exe" 
+PROGRESS_LOG_FILE = os.path.join(BASE_DIR, "progress_log.txt") # Plik do śledzenia postępu
 
 COPILOT_URL = "https://copilot.microsoft.com/"
 WAIT_TIME = 30
 GENERATION_WAIT = 180
 MAX_RETRIES = 2  
 
+# --- ZMIENNOŚĆ DLA ALLEGRO ---
+# Losowe style oświetlenia, aby zmylić algorytmy wykrywające duplikaty
+LIGHTING_STYLES = [
+    "oświetlenie boczne z głębokimi cieniami (dramatic side lighting)",
+    "miękkie oświetlenie typu softbox (soft studio lighting)",
+    "ostre światło konturowe (rim lighting)",
+    "oświetlenie z góry typu 'butterfly' (high angle lighting)",
+    "ciepłe, słoneczne oświetlenie (warm sunlight)",
+    "chłodne, nowoczesne oświetlenie studyjne (cool studio light)"
+]
+
 os.makedirs(IMAGES_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(SESSION_FOLDER, exist_ok=True)
+
+def save_progress_log(filename):
+    """Zapisuje nazwę pliku do logu postępu."""
+    with open(PROGRESS_LOG_FILE, "a") as f:
+        f.write(filename + "\n")
+
+def get_completed_files():
+    """Wczytuje listę ukończonych plików."""
+    if not os.path.exists(PROGRESS_LOG_FILE):
+        return set()
+    with open(PROGRESS_LOG_FILE, "r") as f:
+        return set(line.strip() for line in f)
 
 def initialize_driver():
     """Inicjalizacja przeglądarki Edge."""
@@ -82,27 +106,31 @@ def copy_image_to_clipboard(image_path):
         print(f"Błąd schowka: {e}")
         return False
 
-def paste_image_and_send_prompt(driver, prompt):
-    """Wkleja obraz i wysyła prompt."""
-    try:
-        text_area = WebDriverWait(driver, WAIT_TIME).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'textarea[data-testid="composer-input"]'))
-        )
-        text_area.click()
-        time.sleep(1)
+def get_text_area(driver):
+    """Pomocnicza funkcja do znajdowania pola tekstowego."""
+    return WebDriverWait(driver, WAIT_TIME).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, 'textarea[data-testid="composer-input"]'))
+    )
 
-        # Ctrl+V
+def paste_image_and_send_prompt(driver, prompt):
+    """Wkleja obraz i wysyła prompt (jeden krok)."""
+    try:
+        text_area = get_text_area(driver)
+        
+        # --- Symulacja użytkownika ---
+        text_area.click() 
+        time.sleep(random.uniform(0.5, 1.5))
+        
+        # 1. Wklejenie obrazu
         print("Wklejanie obrazu...")
         text_area.send_keys(Keys.CONTROL, 'v')
-        time.sleep(6) # Nieco dłużej na przetworzenie
+        time.sleep(random.uniform(7, 10)) # Czas na upload
 
-        # Wpisz prompt
+        # 2. Wpisanie promptu
         text_area.send_keys(prompt)
-        time.sleep(2)
-        
-        # Enter
+        time.sleep(random.uniform(1.5, 3))
         text_area.send_keys(Keys.RETURN)
-        print(f"Wysłano zapytanie.")
+        print("Wysłano zapytanie.")
         return True
     except Exception as e:
         print(f"Błąd wysyłania: {e}")
@@ -120,7 +148,6 @@ def wait_for_result_or_error(driver):
             if buttons:
                 return "success", buttons[-1]
 
-            # Pobranie źródła strony do analizy błędów
             page_source = driver.page_source
 
             # 2. Błąd generowania (Content Filter)
@@ -128,8 +155,7 @@ def wait_for_result_or_error(driver):
                 return "error_content", None
             
             # 3. Błąd serwera / przeciążenia (Rate Limit)
-            # Wyłapuje też angielski komunikat ze zrzutu ekranu
-            if "having trouble responding" in page_source or "Coś poszło nie tak" in page_source:
+            if "having trouble responding" in page_source or "Coś poszło nie tak" in page_source or "Niepowodzenie" in page_source:
                 return "error_server", None
 
         except Exception:
@@ -139,8 +165,8 @@ def wait_for_result_or_error(driver):
     
     return "timeout", None
 
-def save_image(driver, button, file_path):
-    """Pobiera plik."""
+def save_image(driver, button, file_path, original_filename):
+    """Pobiera plik i loguje sukces."""
     try:
         driver.execute_script("arguments[0].scrollIntoView(true);", button)
         time.sleep(0.5)
@@ -169,6 +195,10 @@ def save_image(driver, button, file_path):
         if os.path.exists(file_path):
             os.remove(file_path)
         os.rename(old_path, file_path)
+        
+        # Zapis logu tylko po sukcesie
+        save_progress_log(original_filename)
+
         return True
     except Exception as e:
         print(f"Błąd zapisu: {e}")
@@ -180,34 +210,49 @@ def process_single_image(driver, image_path, retry_count=0):
         print("!!! Limit prób wyczerpany. Pomijam zdjęcie.")
         return False
 
+    original_filename = os.path.basename(image_path)
+
     try:
         print(f"--- Próba {retry_count + 1}/{MAX_RETRIES} ---")
         print("Odświeżanie Copilota...")
         driver.get(COPILOT_URL)
-        time.sleep(7) # Dłuższy czas na start
+        # Losowy czas na załadowanie
+        time.sleep(random.uniform(7, 12)) 
+
+        # Dodatkowe kliknięcie w pole, aby upewnić się, że jest aktywne
+        try:
+            get_text_area(driver).click()
+            time.sleep(1)
+        except:
+            print("Nie udało się kliknąć pola tekstowego.")
 
         if not copy_image_to_clipboard(image_path):
             return False
         
-        # --- ULTRA BEZPIECZNY PROMPT ---
-        # Nie używamy słów "przerysuj", "kopia", "zachowaj kształt".
-        # Używamy słów "zanalizuj", "podobny", "w stylu".
-        ultra_safe_prompt = (
-            "Przeanalizuj ten obraz. Wygeneruj nowe, profesjonalne zdjęcie produktowe "
-            "w stylu e-commerce, przedstawiające podobny obiekt. "
-            "Ustaw go na czystym białym tle. Oświetlenie studyjne, wysoka jakość, realizm. "
-            "Format kwadratowy."
-        )
+        # --- ZŁOŻONY PROMPT JEDNOETAPOWY Z LOSOWOŚCIĄ ---
+        
+        # Losowanie stylu
+        style = random.choice(LIGHTING_STYLES)
+        print(f"Wylosowany styl: {style}")
 
-        if not paste_image_and_send_prompt(driver, ultra_safe_prompt):
+        main_prompt = (
+            "Na podstawie załączonego obrazu, stwórz **nowe, unikalne** zdjęcie produktowe tego obiektu. "
+            "Zachowaj główną kompozycję, kształt i kolorystykę produktu, ale zmodernizuj i przerysuj detale, "
+            f"używając realistycznego stylu z **{style}**. "
+            "Wprowadź drobne różnice w cieniach, odbiciach i kącie widzenia, aby zdjęcie było unikalne "
+            "(dla ominięcia detekcji duplikatów). "
+            "Tło musi być idealnie czysto białe (RGB 255, 255, 255). Format kwadratowy, jakość 4K."
+        )
+        
+        if not paste_image_and_send_prompt(driver, main_prompt):
             return False
 
         status, result = wait_for_result_or_error(driver)
 
         if status == "success":
-            base_name = os.path.splitext(os.path.basename(image_path))[0]
+            base_name = os.path.splitext(original_filename)[0]
             output_path = os.path.join(OUTPUT_FOLDER, f"{base_name}_new.png")
-            if save_image(driver, result, output_path):
+            if save_image(driver, result, output_path, original_filename):
                 print(f"Sukces: {os.path.basename(output_path)}")
                 return True
             else:
@@ -215,25 +260,26 @@ def process_single_image(driver, image_path, retry_count=0):
                 return False
         
         elif status == "error_content":
-            print("BŁĄD TREŚCI (AI odmówiło). To zdjęcie może być trudne.")
-            # Przy błędzie treści rzadko pomaga ponawianie tego samego, ale spróbujmy raz.
+            print("BŁĄD TREŚCI (AI odmówiło).")
             if retry_count == 0:
-                print("Próbuję raz jeszcze...")
                 time.sleep(5)
                 return process_single_image(driver, image_path, retry_count + 1)
             return False
         
         elif status == "error_server":
-            print("BŁĄD SERWERA ('Trouble responding'). Musimy odczekać chwilę.")
-            time.sleep(60) # Czekamy minutę, bo serwer jest przeciążony
+            # --- ZMIANA: DŁUGA PAUZA PRZY BANIE SERWERA ---
+            pause_time = random.uniform(300, 600) # 5 do 10 minut
+            print(f"BŁĄD SERWERA/BANA (Wykryto bota/Przeciążenie). Przerwa na {pause_time:.0f}s ({pause_time/60:.1f} min)...") 
+            time.sleep(pause_time)
             return process_single_image(driver, image_path, retry_count + 1)
         
         else:
-            print("Timeout.")
-            return False
+            print("Timeout. Spróbuję ponownie.")
+            time.sleep(random.uniform(5, 10))
+            return process_single_image(driver, image_path, retry_count + 1)
 
     except Exception as e:
-        print(f"Nieoczekiwany błąd: {e}")
+        print(f"Nieoczekiwany błąd sesji: {e}")
         return False
 
 def main():
@@ -242,8 +288,19 @@ def main():
         return
 
     image_files = [f for f in os.listdir(IMAGES_FOLDER) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    print(f"Znaleziono {len(image_files)} zdjęć.")
+    if not image_files:
+        print("Brak zdjęć do przetworzenia.")
+        return
     
+    completed_files = get_completed_files()
+    files_to_process = [f for f in image_files if f not in completed_files]
+    
+    print(f"Znaleziono {len(image_files)} zdjęć. Ukończono: {len(completed_files)}. Do przetworzenia: {len(files_to_process)}")
+    
+    if not files_to_process:
+        print("Wszystkie pliki zostały już przetworzone.")
+        return
+
     try:
         driver = initialize_driver()
     except Exception as e:
@@ -255,15 +312,16 @@ def main():
     time.sleep(5)
 
     try:
-        for i, img_file in enumerate(image_files, 1):
+        total_processed = len(image_files)
+        current_index = len(image_files) - len(files_to_process)
+        
+        for i, img_file in enumerate(files_to_process, 1):
             img_path = os.path.join(IMAGES_FOLDER, img_file)
-            print(f"\n[{i}/{len(image_files)}] Plik: {img_file}")
+            print(f"\n[{i + current_index}/{total_processed}] Plik: {img_file}")
             
             process_single_image(driver, img_path)
             
-            # ZWIĘKSZONA PAUZA (15-25 sekund)
-            # To kluczowe, żeby uniknąć bana czasowego "having trouble responding"
-            sleep_time = random.uniform(15, 25)
+            sleep_time = random.uniform(20, 30)
             print(f"Przerwa regeneracyjna {sleep_time:.1f}s...")
             time.sleep(sleep_time)
 
@@ -271,6 +329,7 @@ def main():
         print("\nStop.")
     finally:
         if driver:
+            # Zamykamy drivera, aby nie zostawiać wiszącej sesji
             driver.quit()
 
 if __name__ == "__main__":
